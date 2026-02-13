@@ -16,13 +16,22 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Build with idf.py
+    - name: Build and Merge Firmware
+      # 显式指定使用 bash，解决 export.sh 兼容性问题
+      shell: bash
       run: |
+        # 1. 载入环境变量
         . $IDF_PATH/export.sh
+        
+        # 2. 清理并设置目标
+        rm -rf build
         idf.py set-target esp32s3
+        
+        # 3. 开始编译
         idf.py build
-        # 核心步骤：合并所有 bin 文件为一个
-        # 注意：地址必须与 partition table 对应，S3 默认 bootloader 在 0x0
+        
+        # 4. 合并所有 bin 文件为一个
+        # 注意：这里我们使用 idf.py 自带的合并逻辑或 esptool
         esptool.py --chip esp32s3 merge_bin \
           -o build/merged-firmware.bin \
           --flash_mode dio \
