@@ -16,29 +16,42 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Fix Component Dependencies (Patch)
+    - name: Fix Dependencies and Configuration
       run: |
-        # 修复 wifi_controller 组件的依赖问题，添加 esp_wifi 和 esp_event
-        sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event/g' components/wifi_controller/CMakeLists.txt
-        # 顺便确保 web_server 组件也有必要的依赖
-        sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event/g' components/web_server/CMakeLists.txt || true
+        # 1. 自动定位包含 idf_component_register 的所有 CMakeLists.txt 并补全基础依赖
+        find . -name "CMakeLists.txt" -exec sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event lwip/g' {} +
+        find . -name "CMakeLists.txt" -exec sed -i 's/PRIV_REQUIRES/PRIV_REQUIRES esp_wifi esp_event lwip/g' {} +
+        
+        # 2. 针对主程序入口的特殊处理（确保包含 http server）
+        if [ -f "main/CMakeLists.txt" ]; then
+          sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event lwip esp_http_server/g' main/CMakeLists.txt
+        fi
 
     - name: Build and Merge Firmware
       shell: bash
       run: |
         . $IDF_PATH/export.sh
+        
+        # 清理旧缓存
         rm -rf build
+        
+        # 针对 S3 设置目标
         idf.py set-target esp32s3
+        
+        # 开启编译
         idf.py build
         
-        # 合并所有 bin 文件为一个
+        # 合并 bin 文件
+        # 我们使用通配符匹配应用 bin 名，防止文件名不一致
+        APP_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
+        
         esptool.py --chip esp32s3 merge_bin \
           -o build/merged-firmware.bin \
           --flash_mode dio \
           --flash_size 4MB \
           0x0 build/bootloader/bootloader.bin \
           0x8000 build/partition_table/partition-table.bin \
-          0x10000 build/esp32-wi-fi-penetration-tool.bin
+          0x10000 $APP_BIN
 
     - name: Upload Merged Firmware
       uses: actions/upload-artifact@v4
