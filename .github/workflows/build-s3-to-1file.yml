@@ -16,25 +16,23 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Clean and Fix Config
+    - name: Hard Fix Dependencies
       run: |
-        # 1. 强制物理删除旧的 build 文件夹，解决报错中的 Refusing to automatically delete
+        # 1. 物理清理 build
         rm -rf build
         
-        # 2. 修改依赖关系（加上 lwip 增强稳定性）
-        find . -name "CMakeLists.txt" -exec sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event lwip/g' {} +
-        find . -name "CMakeLists.txt" -exec sed -i 's/PRIV_REQUIRES/PRIV_REQUIRES esp_wifi esp_event lwip/g' {} +
-        
-        # 3. 针对 main 目录补全 HTTP 服务依赖
-        if [ -f "main/CMakeLists.txt" ]; then
-          sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event lwip esp_http_server/g' main/CMakeLists.txt
-        fi
+        # 2. 强力重写 wifi_controller 的 CMakeLists.txt
+        # 直接指定它所需要的所有核心依赖
+        printf 'idf_component_register(SRCS "wifi_controller.c" "sniffer.c" "ap_scanner.c"\n\tINCLUDE_DIRS "interface"\n\tREQUIRES esp_wifi esp_event lwip esp_http_server)\n' > components/wifi_controller/CMakeLists.txt
+
+        # 3. 强力重写 main 的 CMakeLists.txt
+        # 确保它能找到刚才定义的 wifi_controller
+        printf 'idf_component_register(SRCS "main.c" "attack.c" "attack_method.c" "pcap_serializer.c"\n\tINCLUDE_DIRS "."\n\tREQUIRES esp_wifi esp_event lwip esp_http_server wifi_controller)\n' > main/CMakeLists.txt
 
     - name: Compile
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        # 因为我们已经手动删了 build，这里直接 set-target 就不会报错了
         idf.py set-target esp32s3
         idf.py build
 
@@ -42,18 +40,18 @@ jobs:
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        # 找到编译出的 bin 文件并合并成一个单一固件
-        APP_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
+        # 自动获取生成的项目 bin 文件名
+        PROJECT_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
         esptool.py --chip esp32s3 merge_bin \
           -o build/merged-firmware.bin \
           --flash_mode dio \
           --flash_size 4MB \
           0x0 build/bootloader/bootloader.bin \
           0x8000 build/partition_table/partition-table.bin \
-          0x10000 $APP_BIN
+          0x10000 $PROJECT_BIN
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: esp32-s3-SINGLE-bin
+        name: esp32-s3-firmware
         path: build/merged-firmware.bin
