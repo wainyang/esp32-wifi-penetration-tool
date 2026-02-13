@@ -1,0 +1,38 @@
+name: Build and Merge ESP32-S3 Firmware
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.1
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+
+    - name: Build with idf.py
+      run: |
+        . $IDF_PATH/export.sh
+        idf.py set-target esp32s3
+        idf.py build
+        # 核心步骤：合并所有 bin 文件为一个
+        # 注意：地址必须与 partition table 对应，S3 默认 bootloader 在 0x0
+        esptool.py --chip esp32s3 merge_bin \
+          -o build/merged-firmware.bin \
+          --flash_mode dio \
+          --flash_size 4MB \
+          0x0 build/bootloader/bootloader.bin \
+          0x8000 build/partition_table/partition-table.bin \
+          0x10000 build/esp32-wi-fi-penetration-tool.bin
+
+    - name: Upload Merged Firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: esp32-s3-SINGLE-bin
+        path: build/merged-firmware.bin
