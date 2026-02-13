@@ -16,22 +16,22 @@ jobs:
       with:
         submodules: 'recursive'
 
+    - name: Fix Component Dependencies (Patch)
+      run: |
+        # 修复 wifi_controller 组件的依赖问题，添加 esp_wifi 和 esp_event
+        sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event/g' components/wifi_controller/CMakeLists.txt
+        # 顺便确保 web_server 组件也有必要的依赖
+        sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event/g' components/web_server/CMakeLists.txt || true
+
     - name: Build and Merge Firmware
-      # 显式指定使用 bash，解决 export.sh 兼容性问题
       shell: bash
       run: |
-        # 1. 载入环境变量
         . $IDF_PATH/export.sh
-        
-        # 2. 清理并设置目标
         rm -rf build
         idf.py set-target esp32s3
-        
-        # 3. 开始编译
         idf.py build
         
-        # 4. 合并所有 bin 文件为一个
-        # 注意：这里我们使用 idf.py 自带的合并逻辑或 esptool
+        # 合并所有 bin 文件为一个
         esptool.py --chip esp32s3 merge_bin \
           -o build/merged-firmware.bin \
           --flash_mode dio \
