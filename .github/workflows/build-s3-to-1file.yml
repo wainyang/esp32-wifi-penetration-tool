@@ -16,35 +16,51 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Fix Dependencies and Configuration
+    - name: Hard Reset Component Configs
       run: |
-        # 1. 自动定位包含 idf_component_register 的所有 CMakeLists.txt 并补全基础依赖
-        find . -name "CMakeLists.txt" -exec sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event lwip/g' {} +
-        find . -name "CMakeLists.txt" -exec sed -i 's/PRIV_REQUIRES/PRIV_REQUIRES esp_wifi esp_event lwip/g' {} +
-        
-        # 2. 针对主程序入口的特殊处理（确保包含 http server）
+        # 1. 强力重写 wifi_controller 的配置
+        # 我们直接指定源文件和必要的依赖项
+        cat <<EOF > components/wifi_controller/CMakeLists.txt
+        idf_component_register(
+            SRCS "wifi_controller.c" "sniffer.c" "ap_scanner.c"
+            INCLUDE_DIRS "interface"
+            REQUIRES esp_wifi esp_event lwip
+        )
+EOF
+
+        # 2. 如果存在 web_server 组件，也进行重写
+        if [ -d "components/web_server" ]; then
+          cat <<EOF > components/web_server/CMakeLists.txt
+          idf_component_register(
+              SRCS "web_server.c"
+              INCLUDE_DIRS "interface"
+              REQUIRES esp_wifi esp_event esp_http_server wifi_controller
+          )
+EOF
+        fi
+
+        # 3. 修复 main 目录的依赖
         if [ -f "main/CMakeLists.txt" ]; then
-          sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event lwip esp_http_server/g' main/CMakeLists.txt
+          cat <<EOF > main/CMakeLists.txt
+          idf_component_register(
+              SRCS "main.c" "attack.c" "attack_method.c" "pcap_serializer.c"
+              INCLUDE_DIRS "."
+              REQUIRES esp_wifi esp_event lwip esp_http_server wifi_controller
+          )
+EOF
         fi
 
     - name: Build and Merge Firmware
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        
-        # 清理旧缓存
         rm -rf build
-        
-        # 针对 S3 设置目标
         idf.py set-target esp32s3
-        
-        # 开启编译
+        # 忽略警告转错误的检查，确保顺利编译
         idf.py build
         
-        # 合并 bin 文件
-        # 我们使用通配符匹配应用 bin 名，防止文件名不一致
+        # 查找生成的二进制文件并合并
         APP_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
-        
         esptool.py --chip esp32s3 merge_bin \
           -o build/merged-firmware.bin \
           --flash_mode dio \
