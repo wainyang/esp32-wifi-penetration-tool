@@ -3,41 +3,40 @@ name: Build ESP32-S3 Firmware
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch: # 允许手动点击运行
+  workflow_dispatch: # 允许你在网页上手动点击运行
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 直接使用官方镜像，环境最稳
+    container: espressif/idf:release-v5.1
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        submodules: 'recursive' # 极其重要：确保下载所有依赖子模块
+        submodules: 'recursive' # 必须包含，确保抓取到所有依赖
 
-    - name: esp-idf build
-      uses: espressif/idf-build-action@v1.5
-      with:
-        esp_idf_version: v5.1 # S3 建议使用 v5.1 或 v4.4
-        target: esp32s3
-        path: '.'
+    - name: Build with idf.py
+      run: |
+        . $IDF_PATH/export.sh
+        # 强制指定芯片为 S3
+        idf.py set-target esp32s3
+        # 编译项目
+        idf.py build
 
     - name: Prepare Artifacts
       run: |
         mkdir -p build_artifacts
-        cp build/build.ninja build_artifacts/ || true
-        cp build/flashing_args.bin build_artifacts/ || true
-        # 收集烧录所需的所有 bin 文件
+        # 复制 S3 烧录所需的三个核心文件
         cp build/bootloader/bootloader.bin build_artifacts/
         cp build/partition_table/partition-table.bin build_artifacts/
         cp build/esp32-wi-fi-penetration-tool.bin build_artifacts/
-        # 如果有存储分区文件也一并带上
-        cp build/storage.bin build_artifacts/ || echo "No storage bin found"
+        # 如果编译出了网页存储分区文件，也带上
+        if [ -f "build/storage.bin" ]; then cp build/storage.bin build_artifacts/; fi
 
     - name: Upload Firmware
       uses: actions/upload-artifact@v4
       with:
-        name: esp32-s3-handshake-firmware
+        name: esp32-s3-v5.1-firmware
         path: build_artifacts/*
