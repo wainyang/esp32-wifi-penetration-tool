@@ -1,4 +1,4 @@
-name: Build and Merge ESP32-S3 Firmware
+name: Build S3 Firmware
 
 on:
   push:
@@ -11,66 +11,33 @@ jobs:
     container: espressif/idf:release-v5.1
 
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
       with:
         submodules: 'recursive'
 
-    - name: Hard Reset Component Configs
+    - name: Fix Config
       run: |
-        # 1. 强力重写 wifi_controller 的配置
-        # 我们直接指定源文件和必要的依赖项
-        cat <<EOF > components/wifi_controller/CMakeLists.txt
-        idf_component_register(
-            SRCS "wifi_controller.c" "sniffer.c" "ap_scanner.c"
-            INCLUDE_DIRS "interface"
-            REQUIRES esp_wifi esp_event lwip
-        )
-EOF
+        # 使用最稳妥的命令修改依赖，不再重写文件，只做追加
+        sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event lwip esp_http_server/g' components/wifi_controller/CMakeLists.txt || true
+        sed -i 's/REQUIRES/REQUIRES esp_wifi esp_event lwip esp_http_server/g' main/CMakeLists.txt || true
 
-        # 2. 如果存在 web_server 组件，也进行重写
-        if [ -d "components/web_server" ]; then
-          cat <<EOF > components/web_server/CMakeLists.txt
-          idf_component_register(
-              SRCS "web_server.c"
-              INCLUDE_DIRS "interface"
-              REQUIRES esp_wifi esp_event esp_http_server wifi_controller
-          )
-EOF
-        fi
-
-        # 3. 修复 main 目录的依赖
-        if [ -f "main/CMakeLists.txt" ]; then
-          cat <<EOF > main/CMakeLists.txt
-          idf_component_register(
-              SRCS "main.c" "attack.c" "attack_method.c" "pcap_serializer.c"
-              INCLUDE_DIRS "."
-              REQUIRES esp_wifi esp_event lwip esp_http_server wifi_controller
-          )
-EOF
-        fi
-
-    - name: Build and Merge Firmware
+    - name: Compile
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        rm -rf build
         idf.py set-target esp32s3
-        # 忽略警告转错误的检查，确保顺利编译
         idf.py build
-        
-        # 查找生成的二进制文件并合并
-        APP_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
-        esptool.py --chip esp32s3 merge_bin \
-          -o build/merged-firmware.bin \
-          --flash_mode dio \
-          --flash_size 4MB \
-          0x0 build/bootloader/bootloader.bin \
-          0x8000 build/partition_table/partition-table.bin \
-          0x10000 $APP_BIN
 
-    - name: Upload Merged Firmware
+    - name: Merge
+      shell: bash
+      run: |
+        . $IDF_PATH/export.sh
+        # 使用官方合并命令，直接生成单一 bin
+        esptool.py --chip esp32s3 merge_bin -o build/merged-firmware.bin --flash_mode dio --flash_size 4MB 0x0 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/*.bin
+
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: esp32-s3-SINGLE-bin
+        name: esp32-s3-firmware
         path: build/merged-firmware.bin
