@@ -1,4 +1,4 @@
-name: Build ESP32-S3 Firmware
+name: Build ESP32-S3 Firmware (Merged BIN)
 
 on:
   push:
@@ -16,7 +16,8 @@ jobs:
       - name: Install Arduino CLI
         run: |
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
-          echo "$HOME/bin" >> $GITHUB_PATH
+          sudo mv bin/arduino-cli /usr/local/bin/arduino-cli
+          arduino-cli version
 
       - name: Install ESP32 Core
         run: |
@@ -31,9 +32,34 @@ jobs:
             --export-binaries \
             .
 
-      - name: Upload firmware artifact
+      - name: Install esptool
+        run: |
+          pip3 install esptool
+
+      - name: Merge BIN files into one
+        run: |
+          set -e
+
+          BIN_DIR=$(find . -type d -path "*build/esp32.esp32.esp32s3*")
+          echo "BIN_DIR=$BIN_DIR"
+          ls -lh "$BIN_DIR"
+
+          BOOTLOADER=$(ls "$BIN_DIR"/*bootloader*.bin | head -n1)
+          PARTITIONS=$(ls "$BIN_DIR"/*partitions*.bin | head -n1)
+          FIRMWARE=$(ls "$BIN_DIR"/*.ino.bin | head -n1)
+
+          echo "BOOTLOADER=$BOOTLOADER"
+          echo "PARTITIONS=$PARTITIONS"
+          echo "FIRMWARE=$FIRMWARE"
+
+          esptool.py --chip esp32s3 merge_bin \
+            -o merged-esp32s3.bin \
+            0x0000  "$BOOTLOADER" \
+            0x8000  "$PARTITIONS" \
+            0x10000 "$FIRMWARE"
+
+      - name: Upload merged firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-s3-bin
-          path: |
-            **/*.bin
+          name: esp32-s3-merged-bin
+          path: merged-esp32s3.bin
