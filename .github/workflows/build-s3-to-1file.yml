@@ -16,26 +16,22 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Nuclear Dependency Fix
+    - name: Force Unified Build Structure
       run: |
         rm -rf build
         
-        # 1. 修复 wifi_controller
-        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "interface"\n\tREQUIRES esp_wifi esp_event lwip esp_http_server esp_timer)\n' > components/wifi_controller/CMakeLists.txt
+        # 1. 彻底简化所有子组件，只声明它们存在，不加限制
+        for comp in wifi_controller frame_analyzer hccapx_serializer webserver pcap_serializer wsl_bypasser; do
+          if [ -d "components/$comp" ]; then
+            printf 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "interface" ".")\n' > components/$comp/CMakeLists.txt
+          fi
+        done
 
-        # 2. 修复 frame_analyzer (这是本次报错的根源)
-        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "interface"\n\tREQUIRES esp_wifi esp_event lwip)\n' > components/frame_analyzer/CMakeLists.txt
-
-        # 3. 修复 hccapx_serializer
-        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "interface"\n\tREQUIRES frame_analyzer esp_event)\n' > components/hccapx_serializer/CMakeLists.txt
-
-        # 4. 修复 webserver
-        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "interface"\n\tREQUIRES esp_http_server esp_event wifi_controller frame_analyzer)\n' > components/webserver/CMakeLists.txt
-
-        # 5. 修复主程序 main
-        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "."\n\tREQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer)\n' > main/CMakeLists.txt
+        # 2. 增强 main 组件：把所有自定义组件的路径都塞进 main 的头文件搜索路径中
+        # 这样不管 attack.h 还是 wifi_controller.h 在哪，都能找得到
+        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "." "../components/wifi_controller/interface" "../components/frame_analyzer/interface" "../components/webserver/interface" "../components/hccapx_serializer/interface" "../components/pcap_serializer/interface"\n\tREQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer)\n' > main/CMakeLists.txt
         
-        # 6. 修复 Git 权限
+        # 3. 针对 S3 环境的 Git 权限修复
         git config --global --add safe.directory /__w/esp32-wifi-penetration-tool/esp32-wifi-penetration-tool
 
     - name: Compile
@@ -49,6 +45,7 @@ jobs:
       shell: bash
       run: |
         . $IDF_PATH/export.sh
+        # 自动获取 build 文件夹下唯一的项目 bin 文件
         PROJECT_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
         esptool.py --chip esp32s3 merge_bin \
           -o build/merged-firmware.bin \
