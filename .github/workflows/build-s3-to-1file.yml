@@ -1,4 +1,4 @@
-name: Build ESP32-S3 Firmware
+name: Build ESP32-S3
 
 on:
   push:
@@ -6,70 +6,47 @@ on:
   workflow_dispatch: 
 
 jobs:
-  build:
+  build_firmware:
     runs-on: ubuntu-latest
     container: espressif/idf:release-v5.1
 
     steps:
-    - name: Checkout
+    - name: Checkout Code
       uses: actions/checkout@v4
       with:
         submodules: 'recursive'
 
-    - name: Repair Project Structure
+    - name: Fix Files
       shell: bash
       run: |
         git config --global --add safe.directory /__w/esp32-wifi-penetration-tool/esp32-wifi-penetration-tool
         
-        # 1. 为每个组件强制写入标准的 CMakeLists.txt
-        # 显式包含所有可能的目录，避开 SRC_DIRS 检查
-        components=("wifi_controller" "frame_analyzer" "webserver" "pcap_serializer" "hccapx_serializer")
-        
-        for comp in "${components[@]}"; do
-          mkdir -p "components/$comp"
-          cat > "components/$comp/CMakeLists.txt" <<EOF
-idf_component_register(
-    SRC_DIRS "."
-    INCLUDE_DIRS "." "interface"
-    REQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash
-)
-EOF
-        done
+        # 逐个生成 CMakeLists，不使用任何循环，防止语法冲突
+        echo 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "." "interface" REQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash)' > components/wifi_controller/CMakeLists.txt
+        echo 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "." "interface" REQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash)' > components/frame_analyzer/CMakeLists.txt
+        echo 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "." "interface" REQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash)' > components/webserver/CMakeLists.txt
+        echo 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "." "interface" REQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash)' > components/pcap_serializer/CMakeLists.txt
+        echo 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "." "interface" REQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash)' > components/hccapx_serializer/CMakeLists.txt
 
-        # 2. 为主程序生成 CMakeLists.txt
-        # 手动列出路径，不使用 find 命令，防止 YAML 解析报错
-        cat > main/CMakeLists.txt <<EOF
-idf_component_register(
-    SRC_DIRS "."
-    INCLUDE_DIRS "." "../components/wifi_controller" "../components/wifi_controller/interface" "../components/frame_analyzer" "../components/frame_analyzer/interface" "../components/webserver" "../components/webserver/interface" "../components/pcap_serializer" "../components/hccapx_serializer"
-    REQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer
-)
-EOF
+        # 重写 Main 路径
+        echo 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "." "../components/wifi_controller" "../components/wifi_controller/interface" "../components/frame_analyzer" "../components/frame_analyzer/interface" "../components/webserver" "../components/webserver/interface" "../components/pcap_serializer" "../components/hccapx_serializer" REQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer)' > main/CMakeLists.txt
 
-    - name: Build Firmware
+    - name: Compile
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        rm -rf build
         idf.py set-target esp32s3
         idf.py build
 
-    - name: Merge and Export
+    - name: Merge
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        # 合并固件
-        esptool.py --chip esp32s3 merge_bin \
-          -o build/esp32-s3-firmware.bin \
-          --flash_mode dio \
-          --flash_size 4MB \
-          0x0 build/bootloader/bootloader.bin \
-          0x8000 build/partition_table/partition-table.bin \
-          0x10000 build/*.bin
-        # 这里的 build/*.bin 会匹配到项目主 bin 文件
+        # 使用最死板的路径，不使用通配符
+        esptool.py --chip esp32s3 merge_bin -o build/final_s3.bin --flash_mode dio --flash_size 4MB 0x0 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/esp32-wifi-penetration-tool.bin
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: esp32-s3-firmware
-        path: build/esp32-s3-firmware.bin
+        name: esp32s3-firmware
+        path: build/final_s3.bin
