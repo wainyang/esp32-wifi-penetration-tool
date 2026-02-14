@@ -16,60 +16,67 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Direct CMake Injection
+    - name: Nuclear Fix CMake
       run: |
         git config --global --add safe.directory /__w/esp32-wifi-penetration-tool/esp32-wifi-penetration-tool
         rm -rf build
         
-        # 1. 为每个组件生成最基础的 CMakeLists
-        # 不再尝试指定 src 目录，只在当前目录 (.) 找源码
+        # 1. 自动重构每个组件的 CMakeLists.txt
+        # 使用通配符自动包含存在的源码和接口目录
         for comp in components/*; do
           if [ -d "$comp" ]; then
-            cat <<EOF > "$comp/CMakeLists.txt"
+            echo "Repairing component: $comp"
+            # 搜索当前目录下所有存在文件的子目录
+            SRCS="."
+            [ -d "$comp/src" ] && SRCS="$SRCS \"src\""
+            
+            INCS="."
+            [ -d "$comp/interface" ] && INCS="$INCS \"interface\""
+            [ -d "$comp/include" ] && INCS="$INCS \"include\""
+
+            cat > "$comp/CMakeLists.txt" <<EOF
 idf_component_register(
-    SRC_DIRS "."
-    INCLUDE_DIRS "." "interface"
-    REQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash
+    SRC_DIRS $SRCS
+    INCLUDE_DIRS $INCS
+    REQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash esp_netif
 )
 EOF
           fi
         done
 
-        # 2. 为 main 生成全路径 CMakeLists
-        # 显式把所有组件目录都加进搜索列表，解决头文件找不到的问题
-        cat <<EOF > main/CMakeLists.txt
+        # 2. 为 main 生成万能引用配置
+        # 直接把 components 目录下所有可能的路径都塞进去，防止头文件报错
+        cat > main/CMakeLists.txt <<EOF
 idf_component_register(
     SRC_DIRS "."
-    INCLUDE_DIRS "." "../components/wifi_controller" "../components/wifi_controller/interface" "../components/frame_analyzer" "../components/frame_analyzer/interface" "../components/webserver" "../components/webserver/interface" "../components/pcap_serializer" "../components/hccapx_serializer"
+    INCLUDE_DIRS "." 
+    \$(find ../components -maxdepth 2 -type d | sed 's|^../|    "../|' | sed 's|$|"|')
     REQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer
 )
 EOF
 
-    - name: Compile Firmware
+    - name: Build and Merge
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        # 核心：必须先清理再设置 target
-        idf.py fullclean
+        
+        # 针对 S3 目标的标准流程
         idf.py set-target esp32s3
         idf.py build
-
-    - name: Merge Binary Files
-      shell: bash
-      run: |
-        . $IDF_PATH/export.sh
-        # 这里的通配符确保能搜到生成的 .bin
-        PROJECT_BIN=\$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
+        
+        # 合并固件为单文件
+        echo "Merging binaries..."
+        PROJECT_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
         esptool.py --chip esp32s3 merge_bin \
           -o build/esp32-s3-firmware.bin \
           --flash_mode dio \
           --flash_size 4MB \
           0x0 build/bootloader/bootloader.bin \
           0x8000 build/partition_table/partition-table.bin \
-          0x10000 \$PROJECT_BIN
+          0x10000 $PROJECT_BIN
 
-    - name: Upload Artifact
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: esp32-s3-firmware
+        name: esp32-s3-firmware-ready
         path: build/esp32-s3-firmware.bin
