@@ -1,52 +1,54 @@
-name: Build ESP32-S3 with ESP-IDF
+name: Build ESP32-S3 (ESP-IDF) + Merged BIN
 
 on:
   push:
     branches: [ "main", "master" ]
-  pull_request:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Setup ESP-IDF
-        uses: espressif/setup-espidf@v2
-        with:
-          version: v4.4    # 4.4 或兼容的最新 IDF
-
-      - name: Configure ESP-S3 Target
+      - name: Install dependencies
         run: |
-          export IDF_TARGET=esp32s3
+          sudo apt-get update
+          sudo apt-get install -y git wget flex bison gperf python3 python3-pip cmake ninja-build ccache libffi-dev libssl-dev dfu-util
+
+      - name: Install ESP-IDF
+        run: |
+          git clone -b v4.4.7 --recursive https://github.com/espressif/esp-idf.git $HOME/esp-idf
+          $HOME/esp-idf/install.sh
+
+      - name: Build for ESP32-S3
+        run: |
+          . $HOME/esp-idf/export.sh
           idf.py set-target esp32s3
-
-      - name: Build
-        run: |
-          export IDF_TARGET=esp32s3
           idf.py build
 
       - name: Install esptool
         run: |
           python3 -m pip install --upgrade esptool
 
-      - name: Create merged bin
+      - name: Merge BIN files
         run: |
-          export IDF_TARGET=esp32s3
-          BOOT_LOADER=build/bootloader/bootloader.bin
+          . $HOME/esp-idf/export.sh
+
+          BOOTLOADER=build/bootloader/bootloader.bin
           PARTITIONS=build/partition_table/partition-table.bin
-          APP=build/esp32-wifi-penetration-tool.bin
+          APP=$(ls build/*.bin | grep -v bootloader | grep -v partition | head -n1)
 
           esptool.py --chip esp32s3 merge_bin \
             -o merged-esp32s3.bin \
-            0x0 "$BOOT_LOADER" \
-            0x8000 "$PARTITIONS" \
+            0x0000  "$BOOTLOADER" \
+            0x8000  "$PARTITIONS" \
             0x10000 "$APP"
 
       - name: Upload merged firmware
         uses: actions/upload-artifact@v4
         with:
-          name: merged-firmware
+          name: esp32-s3-merged-bin
           path: merged-esp32s3.bin
