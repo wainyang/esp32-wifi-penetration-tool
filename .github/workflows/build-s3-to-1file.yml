@@ -1,62 +1,23 @@
-name: Build S3 Firmware
-
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch: 
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    container: espressif/idf:release-v5.1
-
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: 'recursive'
-
-    - name: Force Unified Build Structure
+    - name: Surgical Dependency Fix
       run: |
         rm -rf build
         
-        # 1. 彻底简化所有子组件，只声明它们存在，不加限制
-        for comp in wifi_controller frame_analyzer hccapx_serializer webserver pcap_serializer wsl_bypasser; do
-          if [ -d "components/$comp" ]; then
-            printf 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "interface" ".")\n' > components/$comp/CMakeLists.txt
-          fi
-        done
+        # 1. 修复 wifi_controller (它是项目的核心依赖，必须包含 Wi-Fi 系统库)
+        printf 'idf_component_register(SRC_DIRS "." ".." "interface" \n\tINCLUDE_DIRS "interface" "." \n\tREQUIRES esp_wifi esp_event lwip esp_timer esp_http_server)\n' > components/wifi_controller/CMakeLists.txt
 
-        # 2. 增强 main 组件：把所有自定义组件的路径都塞进 main 的头文件搜索路径中
-        # 这样不管 attack.h 还是 wifi_controller.h 在哪，都能找得到
-        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "." "../components/wifi_controller/interface" "../components/frame_analyzer/interface" "../components/webserver/interface" "../components/hccapx_serializer/interface" "../components/pcap_serializer/interface"\n\tREQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer)\n' > main/CMakeLists.txt
+        # 2. 修复 frame_analyzer (它需要分析 Wi-Fi 帧)
+        printf 'idf_component_register(SRC_DIRS "." "interface" \n\tINCLUDE_DIRS "interface" "." \n\tREQUIRES esp_wifi esp_event wifi_controller)\n' > components/frame_analyzer/CMakeLists.txt
+
+        # 3. 修复其他简单的序列化组件
+        printf 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "interface" "." REQUIRES frame_analyzer)\n' > components/hccapx_serializer/CMakeLists.txt
+        printf 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "interface" "." REQUIRES frame_analyzer)\n' > components/pcap_serializer/CMakeLists.txt
+
+        # 4. 修复 webserver
+        printf 'idf_component_register(SRC_DIRS "." INCLUDE_DIRS "interface" "." REQUIRES esp_http_server wifi_controller frame_analyzer)\n' > components/webserver/CMakeLists.txt
+
+        # 5. 核心：让 main 组件能够“看到”所有地方
+        # 我们把所有可能的路径都喂给 main，包括 components 的根目录和 interface 目录
+        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "." "../components/wifi_controller/interface" "../components/frame_analyzer/interface" "../components/webserver/interface" "../components/hccapx_serializer/interface" "../components/pcap_serializer/interface" "../components/wifi_controller" "../components/frame_analyzer"\n\tREQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer)\n' > main/CMakeLists.txt
         
-        # 3. 针对 S3 环境的 Git 权限修复
+        # 6. 修复 Git 权限
         git config --global --add safe.directory /__w/esp32-wifi-penetration-tool/esp32-wifi-penetration-tool
-
-    - name: Compile
-      shell: bash
-      run: |
-        . $IDF_PATH/export.sh
-        idf.py set-target esp32s3
-        idf.py build
-
-    - name: Merge
-      shell: bash
-      run: |
-        . $IDF_PATH/export.sh
-        # 自动获取 build 文件夹下唯一的项目 bin 文件
-        PROJECT_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
-        esptool.py --chip esp32s3 merge_bin \
-          -o build/merged-firmware.bin \
-          --flash_mode dio \
-          --flash_size 4MB \
-          0x0 build/bootloader/bootloader.bin \
-          0x8000 build/partition_table/partition-table.bin \
-          0x10000 $PROJECT_BIN
-
-    - name: Upload
-      uses: actions/upload-artifact@v4
-      with:
-        name: esp32-s3-firmware
-        path: build/merged-firmware.bin
