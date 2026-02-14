@@ -16,18 +16,26 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Complete Dependency Fix
+    - name: Nuclear Dependency Fix
       run: |
         rm -rf build
         
-        # 1. 修复 wifi_controller：包含核心 ESP 组件
+        # 1. 修复 wifi_controller
         printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "interface"\n\tREQUIRES esp_wifi esp_event lwip esp_http_server esp_timer)\n' > components/wifi_controller/CMakeLists.txt
 
-        # 2. 修复 main：包含核心 ESP 组件 + 项目所有自定义组件
-        # 注意：这里加入了 frame_analyzer, webserver, pcap_serializer, hccapx_serializer
+        # 2. 修复 frame_analyzer (这是本次报错的根源)
+        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "interface"\n\tREQUIRES esp_wifi esp_event lwip)\n' > components/frame_analyzer/CMakeLists.txt
+
+        # 3. 修复 hccapx_serializer
+        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "interface"\n\tREQUIRES frame_analyzer esp_event)\n' > components/hccapx_serializer/CMakeLists.txt
+
+        # 4. 修复 webserver
+        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "interface"\n\tREQUIRES esp_http_server esp_event wifi_controller frame_analyzer)\n' > components/webserver/CMakeLists.txt
+
+        # 5. 修复主程序 main
         printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "."\n\tREQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer)\n' > main/CMakeLists.txt
         
-        # 3. 修复 git 安全目录问题
+        # 6. 修复 Git 权限
         git config --global --add safe.directory /__w/esp32-wifi-penetration-tool/esp32-wifi-penetration-tool
 
     - name: Compile
@@ -41,7 +49,6 @@ jobs:
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        # 捕获生成的工程 bin 文件名
         PROJECT_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
         esptool.py --chip esp32s3 merge_bin \
           -o build/merged-firmware.bin \
