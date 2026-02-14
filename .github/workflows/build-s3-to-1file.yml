@@ -16,18 +16,18 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Hard Fix Dependencies
+    - name: Final Fix Dependencies
       run: |
-        # 1. 物理清理 build
         rm -rf build
         
-        # 2. 强力重写 wifi_controller 的 CMakeLists.txt
-        # 直接指定它所需要的所有核心依赖
-        printf 'idf_component_register(SRCS "wifi_controller.c" "sniffer.c" "ap_scanner.c"\n\tINCLUDE_DIRS "interface"\n\tREQUIRES esp_wifi esp_event lwip esp_http_server)\n' > components/wifi_controller/CMakeLists.txt
+        # 1. 重写 wifi_controller 配置：让它自动找源文件，并声明依赖
+        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "interface"\n\tREQUIRES esp_wifi esp_event lwip esp_http_server)\n' > components/wifi_controller/CMakeLists.txt
 
-        # 3. 强力重写 main 的 CMakeLists.txt
-        # 确保它能找到刚才定义的 wifi_controller
-        printf 'idf_component_register(SRCS "main.c" "attack.c" "attack_method.c" "pcap_serializer.c"\n\tINCLUDE_DIRS "."\n\tREQUIRES esp_wifi esp_event lwip esp_http_server wifi_controller)\n' > main/CMakeLists.txt
+        # 2. 重写 main 配置：同样让它自动扫描，并链接 wifi_controller
+        printf 'idf_component_register(SRC_DIRS "."\n\tINCLUDE_DIRS "."\n\tREQUIRES esp_wifi esp_event lwip esp_http_server wifi_controller)\n' > main/CMakeLists.txt
+        
+        # 3. 针对 S3 的 git 权限修复
+        git config --global --add safe.directory /__w/esp32-wifi-penetration-tool/esp32-wifi-penetration-tool
 
     - name: Compile
       shell: bash
@@ -40,7 +40,7 @@ jobs:
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        # 自动获取生成的项目 bin 文件名
+        # 自动定位项目生成的 bin
         PROJECT_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
         esptool.py --chip esp32s3 merge_bin \
           -o build/merged-firmware.bin \
