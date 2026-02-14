@@ -10,8 +10,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
@@ -26,12 +25,9 @@ jobs:
       - name: Build for ESP32-S3
         run: |
           . $HOME/esp-idf/export.sh
+          rm -rf build
           idf.py set-target esp32s3
           idf.py build
-
-      - name: Install esptool
-        run: |
-          python3 -m pip install --upgrade esptool
 
       - name: Merge BIN files
         run: |
