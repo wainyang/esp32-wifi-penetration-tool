@@ -1,8 +1,9 @@
-name: Build ESP32-S3 Firmware (Merged BIN)
+name: Build ESP32-S3 with ESP-IDF
 
 on:
   push:
     branches: [ "main", "master" ]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -10,56 +11,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Arduino CLI
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
-          sudo mv bin/arduino-cli /usr/local/bin/arduino-cli
-          arduino-cli version
+      - name: Setup ESP-IDF
+        uses: espressif/setup-espidf@v2
+        with:
+          version: v4.4    # 4.4 或兼容的最新 IDF
 
-      - name: Install ESP32 Core
+      - name: Configure ESP-S3 Target
         run: |
-          arduino-cli config init
-          arduino-cli core update-index
-          arduino-cli core install esp32:esp32
+          export IDF_TARGET=esp32s3
+          idf.py set-target esp32s3
 
-      - name: Compile for ESP32-S3
+      - name: Build
         run: |
-          arduino-cli compile \
-            --fqbn esp32:esp32:esp32s3 \
-            --export-binaries \
-            .
+          export IDF_TARGET=esp32s3
+          idf.py build
 
       - name: Install esptool
         run: |
-          pip3 install esptool
+          python3 -m pip install --upgrade esptool
 
-      - name: Merge BIN files into one
+      - name: Create merged bin
         run: |
-          set -e
-
-          BIN_DIR=$(find . -type d -path "*build/esp32.esp32.esp32s3*")
-          echo "BIN_DIR=$BIN_DIR"
-          ls -lh "$BIN_DIR"
-
-          BOOTLOADER=$(ls "$BIN_DIR"/*bootloader*.bin | head -n1)
-          PARTITIONS=$(ls "$BIN_DIR"/*partitions*.bin | head -n1)
-          FIRMWARE=$(ls "$BIN_DIR"/*.ino.bin | head -n1)
-
-          echo "BOOTLOADER=$BOOTLOADER"
-          echo "PARTITIONS=$PARTITIONS"
-          echo "FIRMWARE=$FIRMWARE"
+          export IDF_TARGET=esp32s3
+          BOOT_LOADER=build/bootloader/bootloader.bin
+          PARTITIONS=build/partition_table/partition-table.bin
+          APP=build/esp32-wifi-penetration-tool.bin
 
           esptool.py --chip esp32s3 merge_bin \
             -o merged-esp32s3.bin \
-            0x0000  "$BOOTLOADER" \
-            0x8000  "$PARTITIONS" \
-            0x10000 "$FIRMWARE"
+            0x0 "$BOOT_LOADER" \
+            0x8000 "$PARTITIONS" \
+            0x10000 "$APP"
 
       - name: Upload merged firmware
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-s3-merged-bin
+          name: merged-firmware
           path: merged-esp32s3.bin
