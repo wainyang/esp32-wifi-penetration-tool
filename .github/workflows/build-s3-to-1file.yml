@@ -16,40 +16,41 @@ jobs:
       with:
         submodules: 'recursive'
 
-    - name: Surgical Fix and CMake Generation
+    - name: Direct CMake Injection
       run: |
-        # 1. 确保 Git 目录安全，防止权限导致的 0 秒报错
         git config --global --add safe.directory /__w/esp32-wifi-penetration-tool/esp32-wifi-penetration-tool
-        
-        # 2. 清理旧缓存
         rm -rf build
-
-        # 3. 遍历并重写所有自定义组件的 CMakeLists.txt
-        # 强制每个组件都能访问 Wi-Fi、事件循环、定时器和 HTTP 服务等核心组件
-        for comp_dir in components/*; do
-          if [ -d "$comp_dir" ]; then
-            echo "Processing component: $comp_dir"
-            printf 'idf_component_register(SRC_DIRS "." "interface" "src" \n\tINCLUDE_DIRS "." "interface" "include" \n\tREQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash)\n' > "$comp_dir/CMakeLists.txt"
+        
+        # 1. 为每个组件生成最基础的 CMakeLists
+        # 不再尝试指定 src 目录，只在当前目录 (.) 找源码
+        for comp in components/*; do
+          if [ -d "$comp" ]; then
+            cat <<EOF > "$comp/CMakeLists.txt"
+idf_component_register(
+    SRC_DIRS "."
+    INCLUDE_DIRS "." "interface"
+    REQUIRES esp_wifi esp_event lwip esp_timer esp_http_server nvs_flash
+)
+EOF
           fi
         done
 
-        # 4. 特别重写 main 目录的 CMakeLists.txt
-        # 显式包含所有组件的 interface 路径，确保头文件跨组件可见
-        printf 'idf_component_register(SRC_DIRS "." \n\tINCLUDE_DIRS "." \n\t' > main/CMakeLists.txt
-        printf '"../components/wifi_controller/interface" ' >> main/CMakeLists.txt
-        printf '"../components/frame_analyzer/interface" ' >> main/CMakeLists.txt
-        printf '"../components/webserver/interface" ' >> main/CMakeLists.txt
-        printf '"../components/hccapx_serializer/interface" ' >> main/CMakeLists.txt
-        printf '"../components/pcap_serializer/interface" ' >> main/CMakeLists.txt
-        printf '"../components/wifi_controller" ' >> main/CMakeLists.txt
-        printf '"../components/frame_analyzer" \n\t' >> main/CMakeLists.txt
-        printf 'REQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer)\n' >> main/CMakeLists.txt
+        # 2. 为 main 生成全路径 CMakeLists
+        # 显式把所有组件目录都加进搜索列表，解决头文件找不到的问题
+        cat <<EOF > main/CMakeLists.txt
+idf_component_register(
+    SRC_DIRS "."
+    INCLUDE_DIRS "." "../components/wifi_controller" "../components/wifi_controller/interface" "../components/frame_analyzer" "../components/frame_analyzer/interface" "../components/webserver" "../components/webserver/interface" "../components/pcap_serializer" "../components/hccapx_serializer"
+    REQUIRES esp_wifi esp_event lwip esp_http_server esp_timer nvs_flash wifi_controller frame_analyzer webserver pcap_serializer hccapx_serializer
+)
+EOF
 
     - name: Compile Firmware
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        # 设置 S3 目标并开始编译
+        # 核心：必须先清理再设置 target
+        idf.py fullclean
         idf.py set-target esp32s3
         idf.py build
 
@@ -57,19 +58,18 @@ jobs:
       shell: bash
       run: |
         . $IDF_PATH/export.sh
-        # 获取项目生成的 bin 文件的实际路径
-        PROJECT_BIN=$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
-        # 将 bootloader, partition table 和 app 合并成一个 4MB 固件
+        # 这里的通配符确保能搜到生成的 .bin
+        PROJECT_BIN=\$(ls build/*.bin | grep -v "bootloader" | grep -v "partition" | head -n 1)
         esptool.py --chip esp32s3 merge_bin \
-          -o build/esp32-s3-penetration-tool.bin \
+          -o build/esp32-s3-firmware.bin \
           --flash_mode dio \
           --flash_size 4MB \
           0x0 build/bootloader/bootloader.bin \
           0x8000 build/partition_table/partition-table.bin \
-          0x10000 $PROJECT_BIN
+          0x10000 \$PROJECT_BIN
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: esp32-s3-firmware-full
-        path: build/esp32-s3-penetration-tool.bin
+        name: esp32-s3-firmware
+        path: build/esp32-s3-firmware.bin
